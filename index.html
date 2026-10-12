@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fabric Slugger</title>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script>
+// Pre-load a real bold font for PDF embedding (Caldera chokes on Type1 stub fonts)
+let slugFontBytes = null;
+fetch('https://cdn.jsdelivr.net/npm/@fontsource/roboto@5.0.8/files/roboto-latin-700-normal.woff')
+  .then(r => r.arrayBuffer()).then(ab => { slugFontBytes = new Uint8Array(ab); })
+  .catch(() => {});
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: #f5f5f7; color: #1d1d1f; line-height: 1.5;
+}
+.container { max-width: 760px; margin: 0 auto; padding: 36px 20px; }
+header { text-align: center; margin-bottom: 32px; }
+header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+header p { color: #86868b; font-size: 14px; margin-top: 6px; }
+
+.card {
+  background: #fff; border-radius: 14px; padding: 24px 28px;
+  margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.card h2 {
+  font-size: 12px; font-weight: 600; color: #86868b;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 14px; padding-bottom: 6px; border-bottom: 1px solid #f0f0f0;
+}
+
+.file-drop {
+  border: 2px dashed #d2d2d7; border-radius: 14px; padding: 40px 24px;
+  text-align: center; transition: all 0.2s; cursor: pointer; background: #fafafa;
+}
+.file-drop:hover, .file-drop.dragover { border-color: #0071e3; background: #f0f7ff; }
+.file-drop .icon { font-size: 40px; margin-bottom: 10px; }
+.file-drop p { font-size: 15px; color: #6e6e73; }
+.file-drop .sub { font-size: 12px; color: #aaa; margin-top: 6px; }
+.file-drop input { display: none; }
+
+.form-group { margin-bottom: 12px; }
+.form-group label {
+  display: block; font-size: 12px; font-weight: 600; color: #86868b;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+}
+.form-group input {
+  width: 100%; padding: 8px 12px; border: 1px solid #d2d2d7; border-radius: 8px;
+  font-size: 15px; font-family: inherit; background: #fff;
+}
+.form-group input:focus { outline: none; border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.12); }
+
+.file-list { margin-top: 8px; }
+.file-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border: 1px solid #f0f0f0; border-radius: 10px;
+  margin-bottom: 8px; background: #fafafa; font-size: 14px;
+}
+.file-row .file-name { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .file-dim { color: #86868b; font-size: 12px; margin-left: 12px; white-space: nowrap; }
+.file-row .file-status { font-size: 12px; margin-left: 10px; white-space: nowrap; }
+.file-row .file-status.done { color: #059669; }
+.file-row .file-status.error { color: #dc2626; }
+.file-row .file-status.processing { color: #0071e3; }
+.file-row .remove-btn {
+  background: none; border: none; color: #dc2626; cursor: pointer;
+  font-size: 18px; padding: 2px 6px; margin-left: 8px; border-radius: 4px;
+}
+.file-row .remove-btn:hover { background: #fee2e2; }
+
+.btn {
+  display: block; width: 100%; padding: 14px; border: none; border-radius: 12px;
+  font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  text-align: center; font-family: inherit;
+}
+.btn-primary { background: #0071e3; color: #fff; }
+.btn-primary:hover { background: #0077ed; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,113,227,0.3); }
+.btn:disabled { background: #d2d2d7; color: #999; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.status { font-size: 13px; color: #0071e3; margin: 10px 0; text-align: center; font-weight: 500; }
+.note { font-size: 11px; color: #86868b; text-align: center; margin-top: 8px; }
+.info-box {
+  background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 10px;
+  padding: 10px 14px; margin-top: 8px; font-size: 13px; color: #1e40af; line-height: 1.7;
+}
+.info-box b { color: #0071e3; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Fabric Slugger</h1>
+    <p>Slap a slug and trim line on JPGs for fabric printing</p>
+  </header>
+
+  <div class="card">
+    <h2>Job Name</h2>
+    <div class="form-group">
+      <label for="jobName">Job Name (appears in slug area)</label>
+      <input type="text" id="jobName" placeholder="Enter job name...">
+    </div>
+  </div>
+
+  <div class="file-drop" id="dropZone">
+    <div class="icon">📄</div>
+    <p>Drop JPG files here</p>
+    <p class="sub">.jpg .jpeg — one PDF per file, named to match</p>
+    <input type="file" id="fileInput" accept=".jpg,.jpeg,image/jpeg" multiple>
+  </div>
+
+  <div id="filesSection" style="display:none">
+    <div class="card">
+      <h2>Files</h2>
+      <div class="file-list" id="fileList"></div>
+    </div>
+    <button class="btn btn-primary" id="exportBtn">Generate PDFs</button>
+    <p class="note">Each file becomes its own PDF with a 1/4" white slug, 1" top slug with job name, and 6pt black perimeter line.</p>
+  </div>
+
+  <div id="status" class="status" style="display:none"></div>
+</div>
+
+<script>
+var PTS = 72; // points per inch
+var SLUG_SIDES = 0.25; // 1/4" slug on left, right, bottom
+var SLUG_TOP = 1.0;   // 1" slug on top
+var PERIMETER_PT = 6; // 6pt black perimeter line
+var SLUG_FONT_SIZE = 24; // 24pt bold font for slug text
+
+var fileList = [];
+var fileIdSeq = 0;
+
+var dropZone = document.getElementById('dropZone');
+var fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', function() { fileInput.click(); });
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', function() {
+  handleFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+function el(id) { return document.getElementById(id); }
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function setStatus(msg) {
+  var s = el('status');
+  if (msg) { s.textContent = msg; s.style.display = ''; }
+  else { s.style.display = 'none'; }
+}
+
+async function handleFiles(files) {
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var ext = file.name.split('.').pop().toLowerCase();
+    if (ext !== 'jpg' && ext !== 'jpeg') {
+      alert('Skipping ' + file.name + ' — only JPG/JPEG files are accepted.');
+      continue;
+    }
+    var bytes = new Uint8Array(await file.arrayBuffer());
+    var id = ++fileIdSeq;
+    var entry = {
+      id: id,
+      name: file.name,
+      baseName: file.name.replace(/\.[^.]+$/, ''),
+      bytes: bytes,
+      status: 'pending',
+      physW: 0,
+      physH: 0,
+      dpi: 0
+    };
+
+    // Detect DPI from JPEG metadata (JFIF, EXIF, Photoshop)
+    var detectedDpi = detectDpiFromBytes(bytes);
+    var dpi = detectedDpi || 150; // fallback to 150 if no DPI metadata
+
+    // Read dimensions from JPEG SOF marker (pixel dimensions)
+    var dims = readJpegDimensions(bytes);
+    if (!dims) {
+      // Fallback: decode via Image element
+      var blob = new Blob([bytes], { type: 'image/jpeg' });
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      await new Promise(function(resolve, reject) {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = url;
+      });
+      URL.revokeObjectURL(url);
+      dims = { w: img.naturalWidth, h: img.naturalHeight };
+    }
+
+    entry.dpi = dpi;
+    entry.physW = dims.w / dpi;  // physical dimensions in inches
+    entry.physH = dims.h / dpi;
+    entry.pxW = dims.w;
+    entry.pxH = dims.h;
+
+    fileList.push(entry);
+  }
+  renderFileList();
+}
+
+// Read pixel dimensions from JPEG SOF (Start of Frame) marker
+function readJpegDimensions(bytes) {
+  if (bytes.length < 20 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;
+  var limit = Math.min(bytes.length, 65536);
+  var i = 2;
+  while (i < limit - 9) {
+    // Skip fill bytes
+    while (i < limit && bytes[i] !== 0xFF) i++;
+    if (i >= limit - 1) break;
+    // Skip consecutive 0xFF fill bytes
+    while (i < limit - 1 && bytes[i] === 0xFF && bytes[i + 1] === 0xFF) i++;
+    if (i >= limit - 1) break;
+    var marker = bytes[i + 1];
+    // SOS — no more metadata
+    if (marker === 0xDA) break;
+    // Markers without length field
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
+    if (i + 4 > limit) break;
+    var segLen = (bytes[i + 2] << 8) | bytes[i + 3];
+    if (segLen < 2) { i += 2; continue; }
+
+    // SOF markers (C0, C1, C2, C3) — contain height and width
+    if (marker >= 0xC0 && marker <= 0xC3) {
+      if (i + 9 < limit) {
+        var height = (bytes[i + 5] << 8) | bytes[i + 6];
+        var width = (bytes[i + 7] << 8) | bytes[i + 8];
+        return { w: width, h: height };
+      }
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+// === DPI DETECTION (from Imposer/Proofmaker) ===
+function detectDpiFromBytes(uint8) {
+  var dpi = null;
+  dpi = parseJfifDpi(uint8) || parseExifDpi(uint8) || parsePhotoshopDpi(uint8);
+  return dpi;
+}
+
+function jpegNextMarker(d, start, limit) {
+  var i = start;
+  while (i < limit && d[i] === 0xFF) i++;
+  if (i > start) i--;
+  while (i < limit && d[i] !== 0xFF) i++;
+  if (i >= limit) return -1;
+  while (i < limit - 1 && d[i] === 0xFF && d[i + 1] === 0xFF) i++;
+  return (i < limit - 1 && d[i] === 0xFF) ? i : -1;
+}
+
+function parseJfifDpi(d) {
+  if (d.length < 20 || d[0] !== 0xFF || d[1] !== 0xD8) return null;
+  var limit = Math.min(d.length, 65536);
+  var i = 2;
+  while (i >= 0 && i < limit - 18) {
+    i = jpegNextMarker(d, i, limit);
+    if (i < 0) break;
+    var marker = d[i + 1];
+    if (marker === 0xDA) break;
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
+    if (i + 4 > limit) break;
+    var segLen = (d[i + 2] << 8) | d[i + 3];
+    if (segLen < 2) { i += 2; continue; }
+    if (marker === 0xE0 && segLen >= 14) {
+      if (i + 13 < limit &&
+          d[i+4]===0x4A && d[i+5]===0x46 && d[i+6]===0x49 && d[i+7]===0x46 && d[i+8]===0x00) {
+        var unit = d[i + 11];
+        var xd = (d[i + 12] << 8) | d[i + 13];
+        if (unit === 1 && xd > 0) return xd;
+        if (unit === 2 && xd > 0) return Math.round(xd * 2.54);
+        if (unit === 0 && xd >= 72 && xd <= 1200) return xd;
+      }
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+function parseExifDpi(d) {
+  if (d.length < 20 || d[0] !== 0xFF || d[1] !== 0xD8) return null;
+  var limit = Math.min(d.length, 65536);
+  var i = 2;
+  while (i >= 0 && i < limit - 18) {
+    i = jpegNextMarker(d, i, limit);
+    if (i < 0) break;
+    var marker = d[i + 1];
+    if (marker === 0xDA) break;
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
+    if (i + 4 > limit) break;
+    var segLen = (d[i + 2] << 8) | d[i + 3];
+    if (segLen < 2) { i += 2; continue; }
+    if (marker === 0xE1) {
+      if (i + 10 < limit &&
+          d[i+4]===0x45 && d[i+5]===0x78 && d[i+6]===0x69 && d[i+7]===0x66 &&
+          d[i+8]===0x00 && d[i+9]===0x00) {
+        var tiffStart = i + 10;
+        var info = parseTiffIfdFull(d, tiffStart);
+        if (info && info.dpi) return info.dpi;
+      }
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+function parsePhotoshopDpi(d) {
+  if (d.length < 20 || d[0] !== 0xFF || d[1] !== 0xD8) return null;
+  var limit = Math.min(d.length, 1048576);
+  var i = 2;
+  while (i >= 0 && i < limit - 10) {
+    if (d[i] !== 0xFF) { i++; continue; }
+    while (i < limit - 1 && d[i] === 0xFF && d[i + 1] === 0xFF) i++;
+    if (i >= limit - 4) break;
+    var marker = d[i + 1];
+    if (marker === 0xDA) break;
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
+    var segLen = (d[i + 2] << 8) | d[i + 3];
+    if (segLen < 2) { i += 2; continue; }
+    if (marker === 0xED) {
+      var segEnd = Math.min(i + 2 + segLen, limit);
+      var j = i + 4;
+      while (j < segEnd - 12) {
+        if (d[j] === 0x38 && d[j+1] === 0x42 && d[j+2] === 0x49 && d[j+3] === 0x4D) {
+          var resId = (d[j + 4] << 8) | d[j + 5];
+          var pLen = d[j + 6];
+          if (pLen % 2 === 0) pLen++;
+          var dataOff = j + 7 + pLen;
+          if (dataOff + 4 > segEnd) break;
+          var dataLen = ((d[dataOff] << 24) | (d[dataOff+1] << 16) | (d[dataOff+2] << 8) | d[dataOff+3]) >>> 0;
+          dataOff += 4;
+          if (resId === 0x03ED && dataLen >= 8 && dataOff + 8 <= segEnd) {
+            var hResFixed = ((d[dataOff] << 24) | (d[dataOff+1] << 16) | (d[dataOff+2] << 8) | d[dataOff+3]) >>> 0;
+            var hRes = hResFixed / 65536;
+            var hResUnit = (d[dataOff + 4] << 8) | d[dataOff + 5];
+            if (hRes > 0) {
+              return hResUnit === 2 ? Math.round(hRes * 2.54) : Math.round(hRes);
+            }
+          }
+          j = dataOff + dataLen;
+          if (dataLen % 2 !== 0) j++;
+        } else {
+          j++;
+        }
+      }
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+function parseTiffIfdFull(d, base) {
+  if (base + 8 > d.length) return null;
+  var le = (d[base]===0x49 && d[base+1]===0x49);
+  var be = (d[base]===0x4D && d[base+1]===0x4D);
+  if (!le && !be) return null;
+
+  function u16(off) {
+    off += base;
+    if (off+2 > d.length) return 0;
+    return le ? (d[off] | (d[off+1]<<8)) : ((d[off]<<8) | d[off+1]);
+  }
+  function u32(off) {
+    off += base;
+    if (off+4 > d.length) return 0;
+    return le ? ((d[off] | (d[off+1]<<8) | (d[off+2]<<16) | (d[off+3]<<24)) >>> 0)
+              : (((d[off]<<24) | (d[off+1]<<16) | (d[off+2]<<8) | d[off+3]) >>> 0);
+  }
+
+  var magic = u16(2);
+  if (magic !== 42) return null;
+
+  var ifdOff = u32(4);
+  if (ifdOff === 0 || base + ifdOff + 2 > d.length) return null;
+  var nEntries = u16(ifdOff);
+  if (nEntries === 0 || nEntries > 500) return null;
+  var resUnit = 2;
+  var xRes = null;
+
+  for (var e = 0; e < nEntries; e++) {
+    var entryOff = ifdOff + 2 + e * 12;
+    if (base + entryOff + 12 > d.length) break;
+    var tag = u16(entryOff);
+    var type = u16(entryOff + 2);
+    var valOff = u32(entryOff + 8);
+    if (tag === 0x0128) resUnit = (type === 3) ? u16(entryOff + 8) : valOff;
+    if (tag === 0x011A) {
+      if (type === 5) {
+        if (base + valOff + 8 <= d.length) {
+          var num = u32(valOff);
+          var den = u32(valOff + 4);
+          if (den > 0) xRes = num / den;
+        }
+      } else if (type === 3) {
+        xRes = u16(entryOff + 8);
+      } else if (type === 4) {
+        xRes = valOff;
+      }
+    }
+  }
+
+  var dpi = null;
+  if (xRes && xRes > 0) {
+    dpi = (resUnit === 3) ? Math.round(xRes * 2.54) : Math.round(xRes);
+  }
+  return { dpi: dpi };
+}
+
+// === CMYK JPEG DETECTION ===
+function isCmykJpeg(bytes) {
+  for (var i = 0; i < bytes.length - 9; i++) {
+    if (bytes[i] !== 0xFF) continue;
+    if (bytes[i+1] >= 0xC0 && bytes[i+1] <= 0xC2) {
+      return bytes[i+9] === 4; // 4 components = CMYK/YCCK
+    }
+  }
+  return false;
+}
+
+async function cmykJpegToPng(bytes) {
+  var blob = new Blob([bytes], { type: 'image/jpeg' });
+  var url = URL.createObjectURL(blob);
+  var img = new Image();
+  await new Promise(function(r, j) { img.onload = r; img.onerror = j; img.src = url; });
+  URL.revokeObjectURL(url);
+  var c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  var ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  var pngBlob = await new Promise(function(r) { c.toBlob(r, 'image/png'); });
+  return new Uint8Array(await pngBlob.arrayBuffer());
+}
+
+// === FILE LIST RENDERING ===
+function renderFileList() {
+  if (!fileList.length) {
+    el('filesSection').style.display = 'none';
+    return;
+  }
+  el('filesSection').style.display = '';
+  var html = '';
+  for (var i = 0; i < fileList.length; i++) {
+    var f = fileList[i];
+    var dimStr = f.physW.toFixed(2) + '" × ' + f.physH.toFixed(2) + '" (' + f.pxW + '×' + f.pxH + 'px @ ' + f.dpi + ' DPI)';
+    var statusClass = f.status === 'done' ? ' done' : f.status === 'error' ? ' error' : f.status === 'processing' ? ' processing' : '';
+    var statusText = f.status === 'done' ? '✓ PDF ready' : f.status === 'error' ? '✗ ' + f.error : f.status === 'processing' ? 'Processing...' : '';
+    html += '<div class="file-row" id="row-' + f.id + '">';
+    html += '<span class="file-name">' + esc(f.name) + '</span>';
+    html += '<span class="file-dim">' + dimStr + '</span>';
+    html += '<span class="file-status' + statusClass + '">' + statusText + '</span>';
+    html += '<button class="remove-btn" onclick="removeFile(' + f.id + ')" title="Remove">✕</button>';
+    html += '</div>';
+  }
+  el('fileList').innerHTML = html;
+}
+
+function removeFile(id) {
+  fileList = fileList.filter(function(f) { return f.id !== id; });
+  renderFileList();
+}
+
+// === PDF EXPORT ===
+async function exportPDFs() {
+  var btn = el('exportBtn');
+  btn.disabled = true; btn.textContent = 'Generating PDFs...';
+  setStatus('Generating ' + fileList.length + ' PDF' + (fileList.length > 1 ? 's' : '') + '...');
+
+  var jobName = el('jobName').value.trim() || 'FABRIC';
+
+  for (var i = 0; i < fileList.length; i++) {
+    var f = fileList[i];
+    f.status = 'processing';
+    renderFileList();
+    try {
+      var pdfBytes = await generateSlugPdf(f, jobName);
+      var pdfName = f.baseName + '.pdf';
+      download(pdfBytes, pdfName);
+      f.status = 'done';
+    } catch (err) {
+      console.error('Error generating PDF for', f.name, err);
+      f.status = 'error';
+      f.error = err.message || 'Failed';
+    }
+    renderFileList();
+  }
+
+  setStatus('');
+  btn.disabled = false; btn.textContent = 'Generate PDFs';
+
+  var doneCount = fileList.filter(function(f) { return f.status === 'done'; }).length;
+  var errCount = fileList.filter(function(f) { return f.status === 'error'; }).length;
+  if (errCount > 0) {
+    setStatus(doneCount + ' PDF' + (doneCount !== 1 ? 's' : '') + ' generated, ' + errCount + ' failed.');
+  } else {
+    setStatus('Done — ' + doneCount + ' PDF' + (doneCount !== 1 ? 's' : '') + ' generated.');
+  }
+}
+
+async function generateSlugPdf(f, jobName) {
+  // Dimensions in points
+  var imgWpts = f.physW * PTS;   // image width in points
+  var imgHpts = f.physH * PTS;    // image height in points
+
+  // Total PDF size: image + slug margins
+  // Left: SLUG_SIDES, Right: SLUG_SIDES, Bottom: SLUG_SIDES, Top: SLUG_TOP
+  var slugLeft = SLUG_SIDES * PTS;
+  var slugRight = SLUG_SIDES * PTS;
+  var slugBottom = SLUG_SIDES * PTS;
+  var slugTop = SLUG_TOP * PTS;
+
+  var totalW = imgWpts + slugLeft + slugRight;
+  var totalH = imgHpts + slugTop + slugBottom;
+
+  // Create PDF
+  var doc = await PDFLib.PDFDocument.create();
+  if (slugFontBytes && typeof fontkit !== 'undefined') doc.registerFontkit(fontkit);
+  var font = slugFontBytes
+    ? await doc.embedFont(slugFontBytes, { subset: true })
+    : await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+
+  // Embed the JPG image
+  var embedBytes = f.bytes;
+  var embedMime = 'image/jpeg';
+
+  // CMYK JPEGs: convert to PNG to avoid YCCK /Decode issues
+  if (isCmykJpeg(f.bytes)) {
+    embedBytes = await cmykJpegToPng(f.bytes);
+    embedMime = 'image/png';
+  }
+
+  var img;
+  if (embedMime === 'image/jpeg') {
+    img = await doc.embedJpg(embedBytes);
+  } else {
+    img = await doc.embedPng(embedBytes);
+  }
+
+  var page = doc.addPage([totalW, totalH]);
+
+  // 1. Draw white background for the entire page (slug area is white)
+  page.drawRectangle({
+    x: 0, y: 0, width: totalW, height: totalH,
+    color: PDFLib.rgb(1, 1, 1)
+  });
+
+  // 2. Draw the image at its correct position
+  // Image sits at: x=slugLeft, y=slugBottom (bottom-left origin in PDF coords)
+  page.drawImage(img, {
+    x: slugLeft,
+    y: slugBottom,
+    width: imgWpts,
+    height: imgHpts
+  });
+
+  // 3. Draw the slug text in the top slug area (24pt bold)
+  // Position: centered in the top 1" area
+  // PDF coordinates: bottom-left origin, so top slug is at y = imgHpts + slugBottom
+  var textY = imgHpts + slugBottom + (slugTop / 2) - (SLUG_FONT_SIZE / 3);
+  var textX = slugLeft + 4; // small indent from left slug edge
+
+  // Truncate job name if it's too long for the page
+  var maxTextWidth = totalW - slugLeft - slugRight - 8; // 8pt padding
+  var displayName = jobName;
+  var textWidth = font.widthOfTextAtSize(displayName, SLUG_FONT_SIZE);
+  if (textWidth > maxTextWidth) {
+    // Truncate with ellipsis
+    while (displayName.length > 1 && font.widthOfTextAtSize(displayName + '…', SLUG_FONT_SIZE) > maxTextWidth) {
+      displayName = displayName.substring(0, displayName.length - 1);
+    }
+    displayName = displayName + '…';
+  }
+
+  page.drawText(displayName, {
+    x: textX,
+    y: textY,
+    size: SLUG_FONT_SIZE,
+    font: font,
+    color: PDFLib.rgb(0, 0, 0)
+  });
+
+  // 4. Draw 6pt black perimeter line around the OUTSIDE of the slug area
+  // This is a rectangle outline around the entire page area
+  var black = PDFLib.rgb(0, 0, 0);
+  page.drawRectangle({
+    x: 0, y: 0,
+    width: totalW,
+    height: totalH,
+    borderColor: black,
+    borderWidth: PERIMETER_PT
+  });
+
+  // Save with useObjectStreams:false for Caldera compatibility
+  return await doc.save({ useObjectStreams: false });
+}
+
+function download(bytes, name) {
+  var blob = new Blob([bytes], { type: 'application/pdf' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 500);
+}
+
+el('exportBtn').addEventListener('click', exportPDFs);
+</script>
+</body>
+</html>
