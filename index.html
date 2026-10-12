@@ -572,12 +572,16 @@ async function generateSlugPdf(f, jobName) {
   var textY = imgHpts + slugBottom + (slugTop / 2) - (SLUG_FONT_SIZE / 3);
   var textX = slugLeft + 4; // small indent from left slug edge
 
-  // Truncate job name if it's too long for the page
+  // Truncate text if it's too long for the page — try combined first, then filename only
   var maxTextWidth = totalW - slugLeft - slugRight - 8; // 8pt padding
-  var displayName = jobName;
+  var displayName = jobName + '  |  ' + f.name;
   var textWidth = font.widthOfTextAtSize(displayName, SLUG_FONT_SIZE);
   if (textWidth > maxTextWidth) {
-    // Truncate with ellipsis
+    // Try just the filename
+    displayName = f.name;
+    textWidth = font.widthOfTextAtSize(displayName, SLUG_FONT_SIZE);
+  }
+  if (textWidth > maxTextWidth) {
     while (displayName.length > 1 && font.widthOfTextAtSize(displayName + '…', SLUG_FONT_SIZE) > maxTextWidth) {
       displayName = displayName.substring(0, displayName.length - 1);
     }
